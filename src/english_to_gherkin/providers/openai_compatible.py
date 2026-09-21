@@ -33,6 +33,15 @@ class OpenAiCompatibleProvider(LlmProvider):
             )
             response.raise_for_status()
             content = response.json()["choices"][0]["message"]["content"]
+        except requests.HTTPError as exc:
+            response = exc.response
+            try:
+                error_data = response.json()
+                detail = error_data.get("error", {}).get("message", response.text)
+            except (AttributeError, ValueError):
+                detail = response.text if response is not None else str(exc)
+            status = response.status_code if response is not None else "unknown"
+            raise ProviderError(f"Provider returned HTTP {status}: {detail[:1000]}") from exc
         except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as exc:
             raise ProviderError(f"OpenAI-compatible provider request failed: {exc}") from exc
         if not isinstance(content, str) or not content.strip():
