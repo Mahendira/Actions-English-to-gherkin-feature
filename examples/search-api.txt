@@ -1,0 +1,3 @@
+Create a REST Search API that accepts a required query parameter named q.
+When matching products exist, return HTTP 200 with an array of matching products.
+When q is missing or blank, return HTTP 400 with a standards-based error response.
