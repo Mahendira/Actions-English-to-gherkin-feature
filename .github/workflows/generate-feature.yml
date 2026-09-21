@@ -3,13 +3,10 @@ name: Generate Gherkin feature
 on:
   workflow_dispatch:
     inputs:
-      requirement_name:
-        description: Short name used for the feature filename
+      requirement_file:
+        description: Path to a UTF-8 requirement text file in the target repository
         required: true
-        type: string
-      requirement_text:
-        description: English software requirement
-        required: true
+        default: search-api.txt
         type: string
       output_repo:
         description: Optional owner/repo or GitHub URL; blank means this repository
@@ -82,24 +79,26 @@ jobs:
             echo "Invalid target repository. Use owner/repo or a GitHub URL." >&2
             exit 1
           fi
+          owner="${repo%%/*}"
+          name="${repo#*/}"
           echo "repo=$repo" >> "$GITHUB_OUTPUT"
+          echo "owner=$owner" >> "$GITHUB_OUTPUT"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
 
-      - name: Validate authentication configuration
-        env:
-          CROSS_REPO_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
-          TARGET_REPO: ${{ steps.target.outputs.repo }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "$TARGET_REPO" != "$CONTROLLER_REPO" && -z "$CROSS_REPO_TOKEN" ]]; then
-            echo "CROSS_REPO_TOKEN is required when output_repo is a different repository." >&2
-            exit 1
-          fi
+      - name: Create target-repository GitHub App token
+        id: app-token
+        if: steps.target.outputs.repo != github.repository
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ steps.target.outputs.owner }}
+          repositories: ${{ steps.target.outputs.name }}
 
       - name: Resolve base branch and clone target
         id: clone
         env:
-          GH_TOKEN: ${{ steps.target.outputs.repo == github.repository && github.token || secrets.CROSS_REPO_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           TARGET_REPO: ${{ steps.target.outputs.repo }}
           REQUESTED_BRANCH: ${{ inputs.base_branch }}
         shell: bash
@@ -113,25 +112,67 @@ jobs:
           gh repo clone "$TARGET_REPO" target -- --depth 1 --branch "$branch"
           echo "base_branch=$branch" >> "$GITHUB_OUTPUT"
 
-      - name: Generate and validate feature
+      - name: Generate and validate three feature candidates
         working-directory: target
         env:
-          LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'openai_compatible' }}
-          LLM_API_URL: ${{ vars.LLM_API_URL }}
-          LLM_MODEL: ${{ vars.LLM_MODEL }}
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          REQUIREMENT_FILE: ${{ inputs.requirement_file }}
+          OUTPUT_DIRECTORY: ${{ inputs.output_directory }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || secrets.LLM_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
         shell: bash
         run: |
           set -euo pipefail
-          args=(
-            --requirement-name "${{ inputs.requirement_name }}"
-            --requirement-text "${{ inputs.requirement_text }}"
-            --output-dir "${{ inputs.output_directory }}"
+
+          repo_root="$(pwd -P)"
+          requirement_path="$(realpath -m -- "$REQUIREMENT_FILE")"
+          if [[ "$requirement_path" != "$repo_root/"* ]]; then
+            echo "Requirement file must be inside the target repository." >&2
+            exit 1
+          fi
+          if [[ ! -f "$requirement_path" ]]; then
+            echo "Requirement file not found: $REQUIREMENT_FILE" >&2
+            exit 1
+          fi
+
+          for variable in OPENAI_API_KEY OPENAI_MODEL GEMINI_API_KEY GEMINI_MODEL OPENROUTER_API_KEY OPENROUTER_MODEL; do
+            if [[ -z "${!variable:-}" ]]; then
+              echo "Missing required secret or variable: $variable" >&2
+              exit 1
+            fi
+          done
+
+          filename="$(basename -- "$REQUIREMENT_FILE")"
+          feature_name="${filename%.*}"
+          common_args=(
+            --requirement-name "$feature_name"
+            --requirement-file "$requirement_path"
+            --output-dir "$OUTPUT_DIRECTORY"
           )
           if [[ "${{ inputs.overwrite }}" == "true" ]]; then
-            args+=(--overwrite)
+            common_args+=(--overwrite)
           fi
-          english-to-gherkin "${args[@]}"
+
+          LLM_PROVIDER=openai_compatible \
+          LLM_API_URL=https://api.openai.com/v1/chat/completions \
+          LLM_API_KEY="$OPENAI_API_KEY" \
+          LLM_MODEL="$OPENAI_MODEL" \
+            english-to-gherkin "${common_args[@]}" --output-file "${feature_name}-openai.feature"
+
+          LLM_PROVIDER=gemini \
+          LLM_API_URL=https://generativelanguage.googleapis.com/v1beta \
+          LLM_API_KEY="$GEMINI_API_KEY" \
+          LLM_MODEL="$GEMINI_MODEL" \
+            english-to-gherkin "${common_args[@]}" --output-file "${feature_name}-gemini.feature"
+
+          LLM_PROVIDER=openai_compatible \
+          LLM_API_URL=https://openrouter.ai/api/v1/chat/completions \
+          LLM_API_KEY="$OPENROUTER_API_KEY" \
+          LLM_MODEL="$OPENROUTER_MODEL" \
+            english-to-gherkin "${common_args[@]}" --output-file "${feature_name}-openrouter.feature"
 
       - name: Commit generated file
         id: commit
@@ -154,14 +195,14 @@ jobs:
             echo "branch=$branch" >> "$GITHUB_OUTPUT"
           fi
           git add -- "${{ inputs.output_directory }}"
-          git commit -m "Generate feature: ${{ inputs.requirement_name }}"
+          git commit -m "Generate feature candidates from ${{ inputs.requirement_file }}"
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
       - name: Push generated change
         if: steps.commit.outputs.changed == 'true'
         working-directory: target
         env:
-          GH_TOKEN: ${{ steps.target.outputs.repo == github.repository && github.token || secrets.CROSS_REPO_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           CREATE_PR: ${{ inputs.create_pull_request }}
           GENERATED_BRANCH: ${{ steps.commit.outputs.branch }}
         shell: bash
@@ -178,12 +219,12 @@ jobs:
         if: steps.commit.outputs.changed == 'true' && inputs.create_pull_request
         working-directory: target
         env:
-          GH_TOKEN: ${{ steps.target.outputs.repo == github.repository && github.token || secrets.CROSS_REPO_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
         shell: bash
         run: |
           gh pr create \
             --repo "${{ steps.target.outputs.repo }}" \
             --base "${{ steps.clone.outputs.base_branch }}" \
             --head "${{ steps.commit.outputs.branch }}" \
-            --title "Generate feature: ${{ inputs.requirement_name }}" \
-            --body "Generated from an English requirement by workflow run $GITHUB_RUN_ID. Review the scenarios before merging."
+            --title "Generate feature candidates from ${{ inputs.requirement_file }}" \
+            --body "Generated independently with OpenAI, Gemini, and OpenRouter by workflow run $GITHUB_RUN_ID. Compare the three candidates before merging."
