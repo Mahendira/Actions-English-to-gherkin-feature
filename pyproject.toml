@@ -16,6 +16,7 @@ dev = ["pytest>=8,<9", "ruff>=0.6,<1"]
 
 [project.scripts]
 english-to-gherkin = "english_to_gherkin.cli:main"
+consolidate-gherkin = "english_to_gherkin.consolidate_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/english_to_gherkin"]

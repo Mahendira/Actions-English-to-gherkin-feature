@@ -53,6 +53,7 @@ In **Settings → Secrets and variables → Actions**, add:
 | Variable | `OPENAI_MODEL` | OpenAI model enabled for your project |
 | Variable | `GEMINI_MODEL` | Gemini model enabled for your project |
 | Variable | `OPENROUTER_MODEL` | OpenRouter model enabled for your account |
+| Variable | `REVIEWER_MODEL` | Optional free reviewer model; defaults to `qwen/qwen3.8-27b:free` |
 
 The workflow owns the three provider endpoints, so API URLs are not stored as
 repository variables. Provider model availability and free-tier limits change;
@@ -127,13 +128,16 @@ GitHub App installation token when needed, and generates three files:
 features/search-api-openai.feature
 features/search-api-gemini.feature
 features/search-api-openrouter.feature
+features/search-api.feature
 ```
 
 Each candidate is structurally validated before anything is committed. The
-workflow is all-or-nothing: if a provider fails or returns invalid Gherkin, no
-candidate is pushed. It commits the output directory and opens one comparison
-pull request. When the target is the generator repository itself, it uses the
-built-in `GITHUB_TOKEN`.
+free independent reviewer compares the original requirement with all three
+candidates and writes the unsuffixed `search-api.feature` master file. Invalid
+reviewer output is automatically repaired up to three times. The workflow is
+all-or-nothing: if a provider or reviewer fails, nothing is pushed. It commits
+the output directory and opens one pull request. When the target is the
+generator repository itself, it uses the built-in `GITHUB_TOKEN`.
 
 ## Run locally
 
