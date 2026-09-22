@@ -1,0 +1,227 @@
+name: Run tests and coverage
+
+on:
+  workflow_dispatch:
+    inputs:
+      feature_file:
+        description: Final feature file in the target repository
+        required: true
+        default: features/search-api.feature
+        type: string
+      stack:
+        description: Application family and build/test tool
+        required: true
+        default: java-maven
+        type: choice
+        options: [java-maven, java-gradle, python-pytest]
+      output_repo:
+        description: Optional owner/repo; blank means this repository
+        required: false
+        type: string
+      base_branch:
+        description: Optional source branch; blank uses repository default
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CONTROLLER_REPO: ${{ github.repository }}
+      TARGET_INPUT: ${{ inputs.output_repo }}
+    steps:
+      - name: Check out generator
+        uses: actions/checkout@v4
+        with:
+          path: generator
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: generator/pyproject.toml
+
+      - name: Set up Java
+        if: startsWith(inputs.stack, 'java-')
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install generator
+        run: pip install ./generator
+
+      - name: Resolve target repository
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw="${TARGET_INPUT//[[:space:]]/}"
+          if [[ -z "$raw" ]]; then repo="$CONTROLLER_REPO"; else
+            raw="${raw#https://github.com/}"; raw="${raw#git@github.com:}"; repo="${raw%.git}"
+          fi
+          if [[ ! "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then exit 1; fi
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"
+          echo "owner=${repo%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${repo#*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Create target GitHub App token
+        id: app-token
+        if: steps.target.outputs.repo != github.repository
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ steps.target.outputs.owner }}
+          repositories: ${{ steps.target.outputs.name }}
+
+      - name: Clone target repository
+        id: clone
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          TARGET_REPO: ${{ steps.target.outputs.repo }}
+          REQUESTED_BRANCH: ${{ inputs.base_branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="$REQUESTED_BRANCH"
+          if [[ -z "$branch" ]]; then
+            branch="$(gh repo view "$TARGET_REPO" --json defaultBranchRef --jq '.defaultBranchRef.name')"
+          fi
+          gh repo clone "$TARGET_REPO" target -- --depth 1 --branch "$branch"
+          echo "base_branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Generate missing unit tests
+        id: generated
+        working-directory: target
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || secrets.LLM_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+          REVIEWER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          REVIEWER_MODEL: ${{ vars.REVIEWER_MODEL || 'qwen/qwen3.8-27b:free' }}
+          LLM_TIMEOUT_SECONDS: "120"
+        shell: bash
+        run: |
+          set -euo pipefail
+          feature_path="$(realpath -m -- "${{ inputs.feature_file }}")"
+          repo_root="$(pwd -P)"
+          if [[ "$feature_path" != "$repo_root/"* || ! -f "$feature_path" ]]; then
+            echo "Feature file must exist inside the target repository." >&2
+            exit 1
+          fi
+          has_tests=false
+          if [[ "${{ inputs.stack }}" == python-pytest ]]; then
+            if find tests -type f -name 'test_*.py' -print -quit 2>/dev/null | grep -q .; then has_tests=true; fi
+          else
+            if find src/test -type f \( -name '*Test.java' -o -name '*Tests.java' \) -print -quit 2>/dev/null | grep -q .; then has_tests=true; fi
+          fi
+          if [[ "$has_tests" == false ]]; then
+            generate-project-artifact \
+              --feature-file "$feature_path" \
+              --artifact-type unit-tests \
+              --stack "${{ inputs.stack }}" \
+              --repo-root "$repo_root" \
+              --max-attempts 3
+            echo "created=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Existing tests found; generation skipped."
+            echo "created=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run tests with coverage
+        id: tests
+        working-directory: target
+        shell: bash
+        run: |
+          set -uo pipefail
+          status=0
+          case "${{ inputs.stack }}" in
+            java-maven)
+              mvn -B org.jacoco:jacoco-maven-plugin:prepare-agent test org.jacoco:jacoco-maven-plugin:report || status=$?
+              ;;
+            java-gradle)
+              runner=gradle
+              if [[ -x ./gradlew ]]; then runner=./gradlew; fi
+              "$runner" test jacocoTestReport || status=$?
+              ;;
+            python-pytest)
+              python -m pip install -q pytest pytest-cov pytest-bdd
+              if [[ -f pyproject.toml ]]; then python -m pip install -q -e . || true; fi
+              if [[ -f requirements.txt ]]; then python -m pip install -q -r requirements.txt; fi
+              pytest --cov=. --cov-report=term-missing --cov-report=xml --cov-report=html || status=$?
+              ;;
+          esac
+          if [[ "$status" -eq 0 ]]; then
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "passed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ inputs.stack }}-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            target/target/site/jacoco/**
+            target/build/reports/jacoco/**
+            target/coverage.xml
+            target/htmlcov/**
+
+      - name: Commit generated tests
+        if: steps.generated.outputs.created == 'true'
+        id: commit
+        working-directory: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          branch="ai/${GITHUB_RUN_ID}-run-tests-coverage-${GITHUB_RUN_ATTEMPT}"
+          git switch -c "$branch"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git restore --staged -- .coverage coverage.xml htmlcov target build 2>/dev/null || true
+          git commit -m "Generate missing tests and verify coverage"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Push test branch and create pull request
+        if: steps.generated.outputs.created == 'true'
+        working-directory: target
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          TESTS_PASSED: ${{ steps.tests.outputs.passed }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          git push --set-upstream origin "${{ steps.commit.outputs.branch }}"
+          if [[ "$TESTS_PASSED" == true ]]; then
+            title="Generate missing tests and coverage (${{ inputs.stack }})"
+            status="Generated tests passed and produced the attached workflow coverage artifact."
+          else
+            title="[TESTS FAILING] Generate missing tests (${{ inputs.stack }})"
+            status="Generated tests currently fail; merge them to drive the separate application-code workflow."
+          fi
+          gh pr create \
+            --repo "${{ steps.target.outputs.repo }}" \
+            --base "${{ steps.clone.outputs.base_branch }}" \
+            --head "${{ steps.commit.outputs.branch }}" \
+            --title "$title" \
+            --body "Tests were generated from `${{ inputs.feature_file }}` using three candidates and an independent reviewer. $status"
+
+      - name: Report failed tests
+        if: steps.tests.outputs.passed != 'true'
+        run: |
+          echo "Tests failed. Generated tests were preserved in a PR when they were newly created." >&2
+          exit 1

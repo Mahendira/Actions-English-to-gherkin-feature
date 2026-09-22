@@ -102,6 +102,43 @@ into a repository URL, source file, or workflow input.
 For a target owned by another user or organization, that owner must install the
 App and authorize the target repository before the workflow can access it.
 
+## Independent development workflows
+
+Four manually triggered workflows can operate independently from the final
+feature file. Each accepts a target repository, optional base branch, feature
+path, and stack choice:
+
+```text
+java-maven
+java-gradle
+python-pytest
+```
+
+| Workflow | Purpose | Branch suffix |
+|---|---|---|
+| Generate step definitions | Creates reviewed Cucumber or pytest-bdd glue | `generate-step-definitions` |
+| Generate unit tests | Creates reviewed JUnit/Mockito or pytest tests | `generate-unit-tests` |
+| Run tests and coverage | Runs existing tests, or generates missing tests before running coverage | `run-tests-coverage` when tests are generated |
+| Generate application code | Generates code and makes at most three test-driven repair attempts | `generate-application-code` |
+
+Every generation operation asks OpenAI, Gemini, and OpenRouter for independent
+file bundles. A fourth free reviewer, configured by `REVIEWER_MODEL`, compares
+the candidates against the feature and writes only one consolidated file set.
+Generated paths are validated and hidden directories, absolute paths, and path
+traversal are rejected.
+
+The default free reviewer is:
+
+```text
+qwen/qwen3.8-27b:free
+```
+
+The workflows always use pull-request branches and never push generated source
+or tests directly to the base branch. The code workflow creates a clearly
+marked failing PR when tests still fail after three repair attempts. The
+coverage workflow also preserves newly generated tests in a marked PR when
+they initially fail, allowing them to drive the independent code workflow.
+
 ## Run from GitHub Actions
 
 Place a UTF-8 text requirement in the target repository, either at its root or

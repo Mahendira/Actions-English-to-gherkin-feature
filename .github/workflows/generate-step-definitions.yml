@@ -1,0 +1,40 @@
+name: Generate step definitions
+
+on:
+  workflow_dispatch:
+    inputs:
+      feature_file:
+        description: Final feature file in the target repository
+        required: true
+        default: features/search-api.feature
+        type: string
+      stack:
+        description: Application family and build/test tool
+        required: true
+        default: java-maven
+        type: choice
+        options: [java-maven, java-gradle, python-pytest]
+      output_repo:
+        description: Optional owner/repo; blank means this repository
+        required: false
+        type: string
+      base_branch:
+        description: Optional source branch; blank uses repository default
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  generate:
+    uses: ./.github/workflows/reusable-generate-artifact.yml
+    with:
+      artifact_type: step-definitions
+      branch_suffix: generate-step-definitions
+      feature_file: ${{ inputs.feature_file }}
+      stack: ${{ inputs.stack }}
+      output_repo: ${{ inputs.output_repo }}
+      base_branch: ${{ inputs.base_branch }}
+    secrets: inherit
