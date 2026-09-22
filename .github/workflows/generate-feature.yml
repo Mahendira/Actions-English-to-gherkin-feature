@@ -123,7 +123,7 @@ jobs:
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
-          REVIEWER_MODEL: ${{ vars.REVIEWER_MODEL || 'qwen/qwen3.8-27b:free' }}
+          REVIEWER_MODEL: ${{ vars.REVIEWER_MODEL || 'gpt-5.6-luna' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -190,8 +190,8 @@ jobs:
           fi
 
           LLM_PROVIDER=openai_compatible \
-          LLM_API_URL=https://openrouter.ai/api/v1/chat/completions \
-          LLM_API_KEY="$OPENROUTER_API_KEY" \
+          LLM_API_URL=https://api.openai.com/v1/chat/completions \
+          LLM_API_KEY="$OPENAI_API_KEY" \
           LLM_MODEL="$REVIEWER_MODEL" \
             consolidate-gherkin "${reviewer_args[@]}"
 

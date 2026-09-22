@@ -107,8 +107,9 @@ jobs:
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
-          REVIEWER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          REVIEWER_MODEL: ${{ vars.REVIEWER_MODEL || 'qwen/qwen3.8-27b:free' }}
+          REVIEWER_API_KEY: ${{ secrets.OPENAI_API_KEY || secrets.LLM_API_KEY }}
+          REVIEWER_API_URL: https://api.openai.com/v1/chat/completions
+          REVIEWER_MODEL: ${{ vars.REVIEWER_MODEL || 'gpt-5.6-luna' }}
           LLM_TIMEOUT_SECONDS: "120"
         shell: bash
         run: |
