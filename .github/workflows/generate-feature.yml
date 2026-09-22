@@ -157,34 +157,53 @@ jobs:
             common_args+=(--overwrite)
           fi
 
-          LLM_PROVIDER=openai_compatible \
-          LLM_API_URL=https://api.openai.com/v1/chat/completions \
-          LLM_API_KEY="$OPENAI_API_KEY" \
-          LLM_MODEL="$OPENAI_MODEL" \
-            english-to-gherkin "${common_args[@]}" --output-file "${feature_name}-openai.feature"
+          candidate_files=()
 
-          LLM_PROVIDER=gemini \
-          LLM_API_URL=https://generativelanguage.googleapis.com/v1beta \
-          LLM_API_KEY="$GEMINI_API_KEY" \
-          LLM_MODEL="$GEMINI_MODEL" \
-            english-to-gherkin "${common_args[@]}" --output-file "${feature_name}-gemini.feature"
+          if LLM_PROVIDER=openai_compatible \
+            LLM_API_URL=https://api.openai.com/v1/chat/completions \
+            LLM_API_KEY="$OPENAI_API_KEY" \
+            LLM_MODEL="$OPENAI_MODEL" \
+              english-to-gherkin "${common_args[@]}" --output-file "${feature_name}-openai.feature"; then
+            candidate_files+=("$OUTPUT_DIRECTORY/${feature_name}-openai.feature")
+          else
+            echo "WARNING: OpenAI candidate generation failed; continuing." >&2
+          fi
 
-          LLM_PROVIDER=openai_compatible \
-          LLM_API_URL=https://openrouter.ai/api/v1/chat/completions \
-          LLM_API_KEY="$OPENROUTER_API_KEY" \
-          LLM_MODEL="$OPENROUTER_MODEL" \
-            english-to-gherkin "${common_args[@]}" --output-file "${feature_name}-openrouter.feature"
+          if LLM_PROVIDER=gemini \
+            LLM_API_URL=https://generativelanguage.googleapis.com/v1beta \
+            LLM_API_KEY="$GEMINI_API_KEY" \
+            LLM_MODEL="$GEMINI_MODEL" \
+              english-to-gherkin "${common_args[@]}" --output-file "${feature_name}-gemini.feature"; then
+            candidate_files+=("$OUTPUT_DIRECTORY/${feature_name}-gemini.feature")
+          else
+            echo "WARNING: Gemini candidate generation failed after retries; continuing." >&2
+          fi
+
+          if LLM_PROVIDER=openai_compatible \
+            LLM_API_URL=https://openrouter.ai/api/v1/chat/completions \
+            LLM_API_KEY="$OPENROUTER_API_KEY" \
+            LLM_MODEL="$OPENROUTER_MODEL" \
+              english-to-gherkin "${common_args[@]}" --output-file "${feature_name}-openrouter.feature"; then
+            candidate_files+=("$OUTPUT_DIRECTORY/${feature_name}-openrouter.feature")
+          else
+            echo "WARNING: OpenRouter candidate generation failed; continuing." >&2
+          fi
+
+          if (( ${#candidate_files[@]} < 2 )); then
+            echo "ERROR: At least two candidate providers must succeed; received ${#candidate_files[@]}." >&2
+            exit 1
+          fi
 
           reviewer_args=(
             --requirement-name "$feature_name"
             --requirement-file "$requirement_path"
-            --candidate-file "$OUTPUT_DIRECTORY/${feature_name}-openai.feature"
-            --candidate-file "$OUTPUT_DIRECTORY/${feature_name}-gemini.feature"
-            --candidate-file "$OUTPUT_DIRECTORY/${feature_name}-openrouter.feature"
             --output-dir "$OUTPUT_DIRECTORY"
             --output-file "${feature_name}.feature"
             --max-attempts 3
           )
+          for candidate_file in "${candidate_files[@]}"; do
+            reviewer_args+=(--candidate-file "$candidate_file")
+          done
           if [[ "${{ inputs.overwrite }}" == "true" ]]; then
             reviewer_args+=(--overwrite)
           fi

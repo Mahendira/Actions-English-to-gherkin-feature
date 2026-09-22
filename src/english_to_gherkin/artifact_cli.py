@@ -15,7 +15,7 @@ from .artifacts import (
     write_bundle,
 )
 from .config import Settings
-from .errors import GeneratorError
+from .errors import GeneratorError, ProviderError
 from .providers import create_provider
 
 
@@ -69,10 +69,16 @@ def main(argv: list[str] | None = None) -> int:
         system, user = generation_prompt(
             feature, args.artifact_type, args.stack, context, feedback
         )
-        candidates = {
-            name: generate_bundle(provider, system, user, args.max_attempts)
-            for name, provider in providers.items()
-        }
+        candidates = {}
+        for name, provider in providers.items():
+            try:
+                candidates[name] = generate_bundle(provider, system, user, args.max_attempts)
+            except ProviderError as exc:
+                print(f"WARNING: Skipping {name} candidate: {exc}", file=sys.stderr)
+        if len(candidates) < 2:
+            raise GeneratorError(
+                f"At least two candidate providers must succeed; received {len(candidates)}"
+            )
 
         reviewer = create_provider(
             _settings(
