@@ -31,6 +31,26 @@ on:
         required: true
         default: true
         type: boolean
+      candidate_model_1:
+        description: Candidate 1 as provider:model
+        required: true
+        default: openai:gpt-4o-mini
+        type: string
+      candidate_model_2:
+        description: Candidate 2 as provider:model
+        required: true
+        default: gemini:gemini-3.5-flash-lite
+        type: string
+      candidate_model_3:
+        description: Candidate 3 as provider:model
+        required: true
+        default: openrouter:openrouter/free
+        type: string
+      reviewer_model:
+        description: Reviewer as provider:model
+        required: true
+        default: openai:gpt-4o-mini
+        type: string
 
 permissions:
   contents: write
@@ -118,12 +138,13 @@ jobs:
           REQUIREMENT_FILE: ${{ inputs.requirement_file }}
           OUTPUT_DIRECTORY: ${{ inputs.output_directory }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || secrets.LLM_API_KEY }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
-          REVIEWER_MODEL: ${{ vars.REVIEWER_MODEL || 'gpt-5.6-luna' }}
+          CANDIDATE_MODEL_1: ${{ inputs.candidate_model_1 }}
+          CANDIDATE_MODEL_2: ${{ inputs.candidate_model_2 }}
+          CANDIDATE_MODEL_3: ${{ inputs.candidate_model_3 }}
+          REVIEWER_MODEL_SPEC: ${{ inputs.reviewer_model }}
+          LLM_TIMEOUT_SECONDS: "60"
         shell: bash
         run: |
           set -euo pipefail
@@ -139,13 +160,6 @@ jobs:
             exit 1
           fi
 
-          for variable in OPENAI_API_KEY OPENAI_MODEL GEMINI_API_KEY GEMINI_MODEL OPENROUTER_API_KEY OPENROUTER_MODEL; do
-            if [[ -z "${!variable:-}" ]]; then
-              echo "Missing required secret or variable: $variable" >&2
-              exit 1
-            fi
-          done
-
           filename="$(basename -- "$REQUIREMENT_FILE")"
           feature_name="${filename%.*}"
           common_args=(
@@ -159,35 +173,49 @@ jobs:
 
           candidate_files=()
 
-          if LLM_PROVIDER=openai_compatible \
-            LLM_API_URL=https://api.openai.com/v1/chat/completions \
-            LLM_API_KEY="$OPENAI_API_KEY" \
-            LLM_MODEL="$OPENAI_MODEL" \
-              english-to-gherkin "${common_args[@]}" --output-file "${feature_name}-openai.feature"; then
-            candidate_files+=("$OUTPUT_DIRECTORY/${feature_name}-openai.feature")
-          else
-            echo "WARNING: OpenAI candidate generation failed; continuing." >&2
-          fi
+          run_with_model() {
+            local spec="$1"
+            shift
+            local provider="${spec%%:*}"
+            local model="${spec#*:}"
+            if [[ -z "$provider" || -z "$model" || "$provider" == "$model" ]]; then
+              echo "Invalid model selection '$spec'; expected provider:model." >&2
+              return 1
+            fi
+            case "$provider" in
+              openai)
+                LLM_PROVIDER=openai_compatible LLM_API_URL=https://api.openai.com/v1/chat/completions \
+                  LLM_API_KEY="$OPENAI_API_KEY" LLM_MODEL="$model" "$@"
+                ;;
+              gemini)
+                LLM_PROVIDER=gemini LLM_API_URL=https://generativelanguage.googleapis.com/v1beta \
+                  LLM_API_KEY="$GEMINI_API_KEY" LLM_MODEL="$model" "$@"
+                ;;
+              openrouter)
+                LLM_PROVIDER=openai_compatible LLM_API_URL=https://openrouter.ai/api/v1/chat/completions \
+                  LLM_API_KEY="$OPENROUTER_API_KEY" LLM_MODEL="$model" "$@"
+                ;;
+              *) echo "Unsupported provider '$provider'." >&2; return 1 ;;
+            esac
+          }
 
-          if LLM_PROVIDER=gemini \
-            LLM_API_URL=https://generativelanguage.googleapis.com/v1beta \
-            LLM_API_KEY="$GEMINI_API_KEY" \
-            LLM_MODEL="$GEMINI_MODEL" \
-              english-to-gherkin "${common_args[@]}" --output-file "${feature_name}-gemini.feature"; then
-            candidate_files+=("$OUTPUT_DIRECTORY/${feature_name}-gemini.feature")
-          else
-            echo "WARNING: Gemini candidate generation failed after retries; continuing." >&2
-          fi
-
-          if LLM_PROVIDER=openai_compatible \
-            LLM_API_URL=https://openrouter.ai/api/v1/chat/completions \
-            LLM_API_KEY="$OPENROUTER_API_KEY" \
-            LLM_MODEL="$OPENROUTER_MODEL" \
-              english-to-gherkin "${common_args[@]}" --output-file "${feature_name}-openrouter.feature"; then
-            candidate_files+=("$OUTPUT_DIRECTORY/${feature_name}-openrouter.feature")
-          else
-            echo "WARNING: OpenRouter candidate generation failed; continuing." >&2
-          fi
+          candidate_specs=("$CANDIDATE_MODEL_1" "$CANDIDATE_MODEL_2" "$CANDIDATE_MODEL_3")
+          for index in 0 1 2; do
+            slot=$((index + 1))
+            spec="${candidate_specs[$index]}"
+            output_file="${feature_name}-candidate-${slot}.feature"
+            echo "Checking candidate $slot: $spec"
+            if ! check-llm-model --model "$spec" --timeout-seconds 20; then
+              echo "WARNING: Candidate $slot is unavailable; skipping it." >&2
+              continue
+            fi
+            if run_with_model "$spec" english-to-gherkin \
+              "${common_args[@]}" --output-file "$output_file"; then
+              candidate_files+=("$OUTPUT_DIRECTORY/$output_file")
+            else
+              echo "WARNING: Candidate $slot generation failed; continuing." >&2
+            fi
+          done
 
           if (( ${#candidate_files[@]} < 2 )); then
             echo "ERROR: At least two candidate providers must succeed; received ${#candidate_files[@]}." >&2
@@ -208,11 +236,9 @@ jobs:
             reviewer_args+=(--overwrite)
           fi
 
-          LLM_PROVIDER=openai_compatible \
-          LLM_API_URL=https://api.openai.com/v1/chat/completions \
-          LLM_API_KEY="$OPENAI_API_KEY" \
-          LLM_MODEL="$REVIEWER_MODEL" \
-            consolidate-gherkin "${reviewer_args[@]}"
+          echo "Checking reviewer: $REVIEWER_MODEL_SPEC"
+          check-llm-model --model "$REVIEWER_MODEL_SPEC" --timeout-seconds 20
+          run_with_model "$REVIEWER_MODEL_SPEC" consolidate-gherkin "${reviewer_args[@]}"
 
       - name: Commit generated file
         id: commit

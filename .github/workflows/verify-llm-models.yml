@@ -1,0 +1,90 @@
+name: Verify LLM models
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_model_1:
+        description: Candidate 1 as provider:model
+        required: true
+        default: openai:gpt-4o-mini
+        type: string
+      candidate_model_2:
+        description: Candidate 2 as provider:model
+        required: true
+        default: gemini:gemini-3.5-flash-lite
+        type: string
+      candidate_model_3:
+        description: Candidate 3 as provider:model
+        required: true
+        default: openrouter:openrouter/free
+        type: string
+      reviewer_model:
+        description: Reviewer as provider:model
+        required: true
+        default: openai:gpt-4o-mini
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install generator
+        run: pip install .
+
+      - name: Verify selected models
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || secrets.LLM_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          CANDIDATE_MODEL_1: ${{ inputs.candidate_model_1 }}
+          CANDIDATE_MODEL_2: ${{ inputs.candidate_model_2 }}
+          CANDIDATE_MODEL_3: ${{ inputs.candidate_model_3 }}
+          REVIEWER_MODEL_SPEC: ${{ inputs.reviewer_model }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          ready_candidates=0
+          failed=0
+
+          {
+            echo "## LLM readiness"
+            echo
+            echo "| Slot | Selection | Status |"
+            echo "|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          candidates=("$CANDIDATE_MODEL_1" "$CANDIDATE_MODEL_2" "$CANDIDATE_MODEL_3")
+          for index in 0 1 2; do
+            slot=$((index + 1))
+            spec="${candidates[$index]}"
+            if check-llm-model --model "$spec" --timeout-seconds 20; then
+              echo "| Candidate $slot | \`$spec\` | READY |" >> "$GITHUB_STEP_SUMMARY"
+              ready_candidates=$((ready_candidates + 1))
+            else
+              echo "| Candidate $slot | \`$spec\` | UNAVAILABLE |" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+          if check-llm-model --model "$REVIEWER_MODEL_SPEC" --timeout-seconds 20; then
+            echo "| Reviewer | \`$REVIEWER_MODEL_SPEC\` | READY |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Reviewer | \`$REVIEWER_MODEL_SPEC\` | UNAVAILABLE |" >> "$GITHUB_STEP_SUMMARY"
+            failed=1
+          fi
+
+          if (( ready_candidates < 2 )); then
+            echo "At least two candidate models must be ready." >&2
+            failed=1
+          fi
+          exit "$failed"

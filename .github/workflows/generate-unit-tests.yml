@@ -22,6 +22,26 @@ on:
         description: Optional source branch; blank uses repository default
         required: false
         type: string
+      candidate_model_1:
+        description: Candidate 1 as provider:model
+        required: true
+        default: openai:gpt-4o-mini
+        type: string
+      candidate_model_2:
+        description: Candidate 2 as provider:model
+        required: true
+        default: gemini:gemini-3.5-flash-lite
+        type: string
+      candidate_model_3:
+        description: Candidate 3 as provider:model
+        required: true
+        default: openrouter:openrouter/free
+        type: string
+      reviewer_model:
+        description: Reviewer as provider:model
+        required: true
+        default: openai:gpt-4o-mini
+        type: string
 
 permissions:
   contents: write
@@ -37,4 +57,8 @@ jobs:
       stack: ${{ inputs.stack }}
       output_repo: ${{ inputs.output_repo }}
       base_branch: ${{ inputs.base_branch }}
+      candidate_model_1: ${{ inputs.candidate_model_1 }}
+      candidate_model_2: ${{ inputs.candidate_model_2 }}
+      candidate_model_3: ${{ inputs.candidate_model_3 }}
+      reviewer_model: ${{ inputs.reviewer_model }}
     secrets: inherit

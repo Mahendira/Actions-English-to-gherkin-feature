@@ -25,8 +25,10 @@ class GeminiProvider(LlmProvider):
             try:
                 response = requests.post(
                     url,
-                    params={"key": self.settings.api_key},
-                    headers={"Content-Type": "application/json"},
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": self.settings.api_key,
+                    },
                     json={
                         "systemInstruction": {"parts": [{"text": system_prompt}]},
                         "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],

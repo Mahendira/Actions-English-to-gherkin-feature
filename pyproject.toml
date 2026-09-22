@@ -18,6 +18,7 @@ dev = ["pytest>=8,<9", "ruff>=0.6,<1"]
 english-to-gherkin = "english_to_gherkin.cli:main"
 consolidate-gherkin = "english_to_gherkin.consolidate_cli:main"
 generate-project-artifact = "english_to_gherkin.artifact_cli:main"
+check-llm-model = "english_to_gherkin.model_check_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/english_to_gherkin"]

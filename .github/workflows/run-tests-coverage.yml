@@ -22,6 +22,26 @@ on:
         description: Optional source branch; blank uses repository default
         required: false
         type: string
+      candidate_model_1:
+        description: Candidate 1 as provider:model
+        required: true
+        default: openai:gpt-4o-mini
+        type: string
+      candidate_model_2:
+        description: Candidate 2 as provider:model
+        required: true
+        default: gemini:gemini-3.5-flash-lite
+        type: string
+      candidate_model_3:
+        description: Candidate 3 as provider:model
+        required: true
+        default: openrouter:openrouter/free
+        type: string
+      reviewer_model:
+        description: Reviewer as provider:model
+        required: true
+        default: openai:gpt-4o-mini
+        type: string
 
 permissions:
   contents: write
@@ -102,15 +122,13 @@ jobs:
         working-directory: target
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || secrets.LLM_API_KEY }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
-          REVIEWER_API_KEY: ${{ secrets.OPENAI_API_KEY || secrets.LLM_API_KEY }}
-          REVIEWER_API_URL: https://api.openai.com/v1/chat/completions
-          REVIEWER_MODEL: ${{ vars.REVIEWER_MODEL || 'gpt-5.6-luna' }}
-          LLM_TIMEOUT_SECONDS: "120"
+          CANDIDATE_MODEL_1: ${{ inputs.candidate_model_1 }}
+          CANDIDATE_MODEL_2: ${{ inputs.candidate_model_2 }}
+          CANDIDATE_MODEL_3: ${{ inputs.candidate_model_3 }}
+          REVIEWER_MODEL_SPEC: ${{ inputs.reviewer_model }}
+          LLM_TIMEOUT_SECONDS: "60"
         shell: bash
         run: |
           set -euo pipefail

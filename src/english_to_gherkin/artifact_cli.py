@@ -14,19 +14,9 @@ from .artifacts import (
     review_prompt,
     write_bundle,
 )
-from .config import Settings
-from .errors import GeneratorError, ProviderError
+from .errors import GeneratorError
+from .model_config import settings_from_model_spec
 from .providers import create_provider
-
-
-def _settings(prefix: str, provider: str, default_url: str, default_model: str = "") -> Settings:
-    key = os.getenv(f"{prefix}_API_KEY", "").strip()
-    model = os.getenv(f"{prefix}_MODEL", default_model).strip()
-    url = os.getenv(f"{prefix}_API_URL", default_url).strip()
-    missing = [name for name, value in ((f"{prefix}_API_KEY", key), (f"{prefix}_MODEL", model)) if not value]
-    if missing:
-        raise GeneratorError(f"Missing required environment variable(s): {', '.join(missing)}")
-    return Settings(provider, url.rstrip("/"), key, model, int(os.getenv("LLM_TIMEOUT_SECONDS", "120")))
 
 
 def parser() -> argparse.ArgumentParser:
@@ -51,43 +41,29 @@ def main(argv: list[str] | None = None) -> int:
         feedback = args.feedback_file.read_text(encoding="utf-8") if args.feedback_file else None
         context = repository_context(args.repo_root)
 
-        providers = {
-            "openai": create_provider(
-                _settings("OPENAI", "openai_compatible", "https://api.openai.com/v1/chat/completions")
-            ),
-            "gemini": create_provider(
-                _settings("GEMINI", "gemini", "https://generativelanguage.googleapis.com/v1beta")
-            ),
-            "openrouter": create_provider(
-                _settings(
-                    "OPENROUTER",
-                    "openai_compatible",
-                    "https://openrouter.ai/api/v1/chat/completions",
-                )
-            ),
-        }
+        candidate_specs = [
+            os.getenv("CANDIDATE_MODEL_1", "openai:gpt-4o-mini"),
+            os.getenv("CANDIDATE_MODEL_2", "gemini:gemini-3.5-flash-lite"),
+            os.getenv("CANDIDATE_MODEL_3", "openrouter:openrouter/free"),
+        ]
         system, user = generation_prompt(
             feature, args.artifact_type, args.stack, context, feedback
         )
         candidates = {}
-        for name, provider in providers.items():
+        for index, spec in enumerate(candidate_specs, start=1):
+            name = f"candidate-{index}-{spec}"
             try:
+                provider = create_provider(settings_from_model_spec(spec))
                 candidates[name] = generate_bundle(provider, system, user, args.max_attempts)
-            except ProviderError as exc:
+            except GeneratorError as exc:
                 print(f"WARNING: Skipping {name} candidate: {exc}", file=sys.stderr)
         if len(candidates) < 2:
             raise GeneratorError(
                 f"At least two candidate providers must succeed; received {len(candidates)}"
             )
 
-        reviewer = create_provider(
-            _settings(
-                "REVIEWER",
-                "openai_compatible",
-                "https://openrouter.ai/api/v1/chat/completions",
-                "qwen/qwen3.8-27b:free",
-            )
-        )
+        reviewer_spec = os.getenv("REVIEWER_MODEL_SPEC", "openai:gpt-4o-mini")
+        reviewer = create_provider(settings_from_model_spec(reviewer_spec))
         review_system, review_user = review_prompt(
             feature, args.artifact_type, args.stack, candidates, context
         )
