@@ -25,12 +25,13 @@ on:
         type: choice
         options: [java-maven, java-gradle, python-pytest]
       output_repo:
-        description: Optional owner/repo; blank means this repository
-        required: false
+        description: Target application repository (owner/repo)
+        required: true
         type: string
       base_branch:
-        description: Optional source branch; blank uses repository default
-        required: false
+        description: Target application base branch
+        required: true
+        default: main
         type: string
       candidate_model_1:
         description: Candidate 1 as provider:model
@@ -93,9 +94,13 @@ jobs:
         run: |
           set -euo pipefail
           raw="${TARGET_INPUT//[[:space:]]/}"
-          if [[ -z "$raw" ]]; then repo="$CONTROLLER_REPO"; else
-            raw="${raw#https://github.com/}"; raw="${raw#git@github.com:}"; repo="${raw%.git}"
+          if [[ -z "$raw" ]]; then
+            echo "Target application repository is required. Enter owner/repo." >&2
+            exit 1
           fi
+          raw="${raw#https://github.com/}"
+          raw="${raw#git@github.com:}"
+          repo="${raw%.git}"
           if [[ ! "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then exit 1; fi
           echo "repo=$repo" >> "$GITHUB_OUTPUT"
           echo "owner=${repo%%/*}" >> "$GITHUB_OUTPUT"
