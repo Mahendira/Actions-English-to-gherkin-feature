@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -18,6 +18,44 @@ MAX_FILE_BYTES = 200_000
 @dataclass(frozen=True)
 class FileBundle:
     files: dict[str, str]
+
+
+PRODUCTION_SOURCE_SUFFIXES = {
+    ".c",
+    ".cc",
+    ".cpp",
+    ".cs",
+    ".go",
+    ".h",
+    ".hpp",
+    ".java",
+    ".js",
+    ".jsx",
+    ".kt",
+    ".kts",
+    ".py",
+    ".rs",
+    ".ts",
+    ".tsx",
+}
+
+
+def validate_application_layout(bundle: FileBundle, source_directory: str) -> None:
+    source = PurePosixPath(source_directory)
+    for raw_path in bundle.files:
+        path = PurePosixPath(raw_path)
+        if path.parts and path.parts[0] == "app":
+            raise ValidationError(
+                f"Production application files must use {source_directory}/, not app/: {raw_path}"
+            )
+        if path.suffix.lower() not in PRODUCTION_SOURCE_SUFFIXES:
+            continue
+        under_source = path.parts[: len(source.parts)] == source.parts
+        test_source = path.parts and path.parts[0] in {"test", "tests"}
+        if not under_source and not test_source:
+            raise ValidationError(
+                f"Source file must be under {source_directory}/ or tests/: {raw_path}"
+            )
 
 
 def _extract_json(text: str) -> dict:
@@ -102,6 +140,7 @@ def generation_prompt(
     stack: str,
     repository_context: str,
     feedback: str | None = None,
+    source_directory: str = "src",
 ) -> tuple[str, str]:
     system = """You are a senior software engineer working in a pull-request-only automation.
 Return only JSON in this exact shape:
@@ -111,11 +150,25 @@ Do not modify CI workflows, secrets, generated coverage output, or the authorita
 Do not add behavior that is unsupported by the feature.
 """
     repair = f"\n\nBuild/test feedback to address:\n{feedback[-12000:]}" if feedback else ""
+    layout = ""
+    if artifact_type == "application-code":
+        layout = f"""
+
+Application repository layout:
+- Put all production source code and runtime assets under `{source_directory}/`.
+- Do not create an `app/` directory or place production source at the repository root.
+- Preserve the requirement text, authoritative feature files, and existing tests.
+- Keep build, dependency, container, and infrastructure-as-code files at the repository root
+  when they are needed to build or deploy the application.
+- When the feature describes cloud infrastructure, include the minimal deployable infrastructure
+  configuration required by the selected stack.
+"""
     user = f"""Artifact: {artifact_type}
 Stack: {stack}
 
 Engineering rules:
 {artifact_instructions(artifact_type, stack)}
+{layout}
 
 Authoritative Gherkin feature:
 {feature_text.strip()}
@@ -134,6 +187,7 @@ def review_prompt(
     stack: str,
     candidates: Mapping[str, FileBundle],
     repository_context: str,
+    source_directory: str = "src",
 ) -> tuple[str, str]:
     system = """You are an independent senior code reviewer and consolidator.
 Return only JSON in this exact shape:
@@ -151,11 +205,21 @@ Never invent behavior. Never output Markdown or patches. Use safe repository-rel
                 ensure_ascii=False,
             )
         )
+    layout = ""
+    if artifact_type == "application-code":
+        layout = f"""
+
+Application repository layout:
+- Put all production source code and runtime assets under `{source_directory}/`.
+- Do not create an `app/` directory or place production source at the repository root.
+- Preserve requirement text, feature files, tests, and required deployment configuration.
+"""
     user = f"""Artifact: {artifact_type}
 Stack: {stack}
 
 Engineering rules:
 {artifact_instructions(artifact_type, stack)}
+{layout}
 
 Authoritative Gherkin feature:
 {feature_text.strip()}
@@ -175,12 +239,16 @@ def generate_bundle(
     system_prompt: str,
     user_prompt: str,
     max_attempts: int = 3,
+    validator: Callable[[FileBundle], None] | None = None,
 ) -> FileBundle:
     feedback = ""
     for _ in range(max_attempts):
         raw = provider.generate(system_prompt, user_prompt + feedback)
         try:
-            return parse_bundle(raw)
+            bundle = parse_bundle(raw)
+            if validator:
+                validator(bundle)
+            return bundle
         except ValidationError as exc:
             feedback = f"\n\nPrevious JSON was rejected: {exc}. Return the complete corrected JSON."
     raise ValidationError(f"Model failed to produce a valid file bundle after {max_attempts} attempts")

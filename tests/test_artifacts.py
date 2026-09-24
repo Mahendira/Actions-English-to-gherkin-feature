@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from english_to_gherkin.artifacts import FileBundle, parse_bundle, write_bundle
+from english_to_gherkin.artifacts import (
+    FileBundle,
+    parse_bundle,
+    validate_application_layout,
+    write_bundle,
+)
 from english_to_gherkin.errors import ValidationError
 
 
@@ -29,3 +34,21 @@ def test_write_bundle_rejects_escape(tmp_path: Path):
     bundle = FileBundle({"../outside.txt": "x\n"})
     with pytest.raises(Exception, match="escapes repository"):
         write_bundle(tmp_path, bundle)
+
+
+def test_application_layout_accepts_source_and_root_deployment_files():
+    bundle = FileBundle(
+        {
+            "src/contact_form.py": "pass\n",
+            "tests/test_contact_form.py": "pass\n",
+            "template.yaml": "Resources: {}\n",
+            "requirements.txt": "boto3\n",
+        }
+    )
+    validate_application_layout(bundle, "src")
+
+
+def test_application_layout_rejects_app_directory():
+    bundle = FileBundle({"app/contact_form.py": "pass\n"})
+    with pytest.raises(ValidationError, match="not app"):
+        validate_application_layout(bundle, "src")

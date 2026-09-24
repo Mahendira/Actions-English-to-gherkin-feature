@@ -8,6 +8,16 @@ on:
         required: true
         default: features/search-api.feature
         type: string
+      requirement_file:
+        description: Requirement text file retained with this application
+        required: true
+        default: examples/search-api.txt
+        type: string
+      source_directory:
+        description: Production application source directory
+        required: true
+        default: src
+        type: string
       stack:
         description: Application family and build/test tool
         required: true
@@ -141,9 +151,14 @@ jobs:
           set -uo pipefail
           repo_root="$(pwd -P)"
           feature_path="$(realpath -m -- "${{ inputs.feature_file }}")"
+          requirement_path="$(realpath -m -- "${{ inputs.requirement_file }}")"
           feedback_file="$RUNNER_TEMP/code-test-feedback.txt"
           if [[ "$feature_path" != "$repo_root/"* || ! -f "$feature_path" ]]; then
             echo "Feature file must exist inside the target repository." >&2
+            exit 1
+          fi
+          if [[ "$requirement_path" != "$repo_root/"* || ! -f "$requirement_path" ]]; then
+            echo "Requirement file must exist inside the target application repository." >&2
             exit 1
           fi
 
@@ -176,6 +191,7 @@ jobs:
               --artifact-type application-code
               --stack "${{ inputs.stack }}"
               --repo-root "$repo_root"
+              --source-directory "${{ inputs.source_directory }}"
               --max-attempts 3
             )
             if [[ -s "$feedback_file" ]]; then args+=(--feedback-file "$feedback_file"); fi
