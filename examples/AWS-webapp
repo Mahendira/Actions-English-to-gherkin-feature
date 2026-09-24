@@ -1,0 +1,24 @@
+Goal: Build a contact page where a visitor enters their first name, last name, email address, and message. The application saves the submission and displays a confirmation page.
+
+| ID    | Requirement                                                          |
+| ----- | -------------------------------------------------------------------- |
+| FR-01 | A `GET` request to the application URL displays the contact form.    |
+| FR-02 | The form collects first name, last name, email address, and message. |
+| FR-03 | Submitting the form sends a `POST` request containing those fields.  |
+| FR-04 | The application validates the submission and saves it to DynamoDB.   |
+| FR-05 | A successful save displays a confirmation page.                      |
+| FR-06 | A failed save displays an error and does not claim success.          |
+Architecture
+
+The visitor accesses a regional API Gateway REST API. Its GET and POST methods use Lambda proxy integration with a Python Lambda function. Lambda serves the HTML pages and writes submissions to a DynamoDB table. The deployed API stage provides the application URL.
+
+Acceptance criteria
+Opening the URL displays the contact form.
+Submitting valid details creates an item in DynamoDB with the entered first name, last name, email, and message.
+The confirmation page appears only after the write succeeds.
+Missing or invalid fields produce a clear error.
+A database failure produces an error response and can be investigated through Lambda logs.
+
+Design decision before implementation: The video uses email as the DynamoDB partition key and says duplicate emails are rejected. A partition key alone does not reject duplicates: a normal write can replace an existing item. If each email may submit only once, use a conditional write. If repeat messages are allowed, use a unique submission ID as the key.
+
+For deployment, give Lambda logging permission and write access limited to this table. The transcript demonstrates broad DynamoDB permissions, but the application only requires access to its own table.
