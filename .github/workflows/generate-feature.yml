@@ -121,14 +121,20 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           TARGET_REPO: ${{ steps.target.outputs.repo }}
           REQUESTED_BRANCH: ${{ inputs.base_branch }}
+          WORKFLOW_BRANCH: ${{ github.ref_name }}
+          CONTROLLER_REPO: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
           gh repo view "$TARGET_REPO" >/dev/null
           branch="$REQUESTED_BRANCH"
+          if [[ -z "$branch" && "$TARGET_REPO" == "$CONTROLLER_REPO" ]]; then
+            branch="$WORKFLOW_BRANCH"
+          fi
           if [[ -z "$branch" ]]; then
             branch="$(gh repo view "$TARGET_REPO" --json defaultBranchRef --jq '.defaultBranchRef.name')"
           fi
+          echo "Cloning $TARGET_REPO branch: $branch"
           gh repo clone "$TARGET_REPO" target -- --depth 1 --branch "$branch"
           echo "base_branch=$branch" >> "$GITHUB_OUTPUT"
 
