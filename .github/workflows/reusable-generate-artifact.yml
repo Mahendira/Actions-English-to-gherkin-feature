@@ -25,13 +25,16 @@ on:
         required: true
         type: string
       candidate_model_2:
-        required: true
+        required: false
+        default: ""
         type: string
       candidate_model_3:
-        required: true
+        required: false
+        default: ""
         type: string
       reviewer_model:
-        required: true
+        required: false
+        default: ""
         type: string
 
 permissions:

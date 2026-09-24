@@ -37,19 +37,19 @@ on:
         default: openai:gpt-4o-mini
         type: string
       candidate_model_2:
-        description: Candidate 2 as provider:model
-        required: true
-        default: gemini:gemini-3.5-flash-lite
+        description: Optional candidate 2 as provider:model; leave blank to skip
+        required: false
+        default: ""
         type: string
       candidate_model_3:
-        description: Candidate 3 as provider:model
-        required: true
-        default: openrouter:openrouter/free
+        description: Optional candidate 3 as provider:model; leave blank to skip
+        required: false
+        default: ""
         type: string
       reviewer_model:
-        description: Reviewer as provider:model
-        required: true
-        default: openai:gpt-4o-mini
+        description: Optional reviewer as provider:model; blank uses first successful candidate
+        required: false
+        default: ""
         type: string
 
 permissions:
@@ -203,6 +203,10 @@ jobs:
           for index in 0 1 2; do
             slot=$((index + 1))
             spec="${candidate_specs[$index]}"
+            if [[ -z "${spec//[[:space:]]/}" ]]; then
+              echo "Candidate $slot was not selected; skipping it."
+              continue
+            fi
             output_file="${feature_name}-candidate-${slot}.feature"
             echo "Checking candidate $slot: $spec"
             if ! check-llm-model --model "$spec" --timeout-seconds 20; then
@@ -217,8 +221,8 @@ jobs:
             fi
           done
 
-          if (( ${#candidate_files[@]} < 2 )); then
-            echo "ERROR: At least two candidate providers must succeed; received ${#candidate_files[@]}." >&2
+          if (( ${#candidate_files[@]} < 1 )); then
+            echo "ERROR: At least one candidate provider must succeed." >&2
             exit 1
           fi
 
@@ -236,9 +240,28 @@ jobs:
             reviewer_args+=(--overwrite)
           fi
 
-          echo "Checking reviewer: $REVIEWER_MODEL_SPEC"
-          check-llm-model --model "$REVIEWER_MODEL_SPEC" --timeout-seconds 20
-          run_with_model "$REVIEWER_MODEL_SPEC" consolidate-gherkin "${reviewer_args[@]}"
+          promote_first_candidate() {
+            local destination="$OUTPUT_DIRECTORY/${feature_name}.feature"
+            if [[ -e "$destination" && "${{ inputs.overwrite }}" != "true" ]]; then
+              echo "ERROR: Output already exists: $destination. Enable overwrite to replace it." >&2
+              return 1
+            fi
+            cp -- "${candidate_files[0]}" "$destination"
+            echo "Reviewer unavailable or not selected; promoted ${candidate_files[0]} to $destination"
+          }
+
+          if [[ -z "${REVIEWER_MODEL_SPEC//[[:space:]]/}" ]]; then
+            promote_first_candidate
+          else
+            echo "Checking reviewer: $REVIEWER_MODEL_SPEC"
+            if check-llm-model --model "$REVIEWER_MODEL_SPEC" --timeout-seconds 20 && \
+              run_with_model "$REVIEWER_MODEL_SPEC" consolidate-gherkin "${reviewer_args[@]}"; then
+              echo "Reviewer consolidation completed."
+            else
+              echo "WARNING: Reviewer failed; continuing with the first successful candidate." >&2
+              promote_first_candidate
+            fi
+          fi
 
       - name: Commit generated file
         id: commit

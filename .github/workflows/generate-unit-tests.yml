@@ -28,19 +28,19 @@ on:
         default: openai:gpt-4o-mini
         type: string
       candidate_model_2:
-        description: Candidate 2 as provider:model
-        required: true
-        default: gemini:gemini-3.5-flash-lite
+        description: Optional candidate 2 as provider:model; leave blank to skip
+        required: false
+        default: ""
         type: string
       candidate_model_3:
-        description: Candidate 3 as provider:model
-        required: true
-        default: openrouter:openrouter/free
+        description: Optional candidate 3 as provider:model; leave blank to skip
+        required: false
+        default: ""
         type: string
       reviewer_model:
-        description: Reviewer as provider:model
-        required: true
-        default: openai:gpt-4o-mini
+        description: Optional reviewer; blank uses first successful candidate
+        required: false
+        default: ""
         type: string
 
 permissions:

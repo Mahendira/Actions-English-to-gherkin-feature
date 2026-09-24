@@ -43,9 +43,10 @@ def main(argv: list[str] | None = None) -> int:
 
         candidate_specs = [
             os.getenv("CANDIDATE_MODEL_1", "openai:gpt-4o-mini"),
-            os.getenv("CANDIDATE_MODEL_2", "gemini:gemini-3.5-flash-lite"),
-            os.getenv("CANDIDATE_MODEL_3", "openrouter:openrouter/free"),
+            os.getenv("CANDIDATE_MODEL_2", ""),
+            os.getenv("CANDIDATE_MODEL_3", ""),
         ]
+        candidate_specs = [spec.strip() for spec in candidate_specs if spec.strip()]
         system, user = generation_prompt(
             feature, args.artifact_type, args.stack, context, feedback
         )
@@ -57,17 +58,31 @@ def main(argv: list[str] | None = None) -> int:
                 candidates[name] = generate_bundle(provider, system, user, args.max_attempts)
             except GeneratorError as exc:
                 print(f"WARNING: Skipping {name} candidate: {exc}", file=sys.stderr)
-        if len(candidates) < 2:
-            raise GeneratorError(
-                f"At least two candidate providers must succeed; received {len(candidates)}"
-            )
+        if not candidates:
+            raise GeneratorError("At least one candidate provider must succeed")
 
-        reviewer_spec = os.getenv("REVIEWER_MODEL_SPEC", "openai:gpt-4o-mini")
-        reviewer = create_provider(settings_from_model_spec(reviewer_spec))
-        review_system, review_user = review_prompt(
-            feature, args.artifact_type, args.stack, candidates, context
-        )
-        final_bundle = generate_bundle(reviewer, review_system, review_user, args.max_attempts)
+        reviewer_spec = os.getenv("REVIEWER_MODEL_SPEC", "").strip()
+        final_bundle = next(iter(candidates.values()))
+        if reviewer_spec:
+            try:
+                reviewer = create_provider(settings_from_model_spec(reviewer_spec))
+                review_system, review_user = review_prompt(
+                    feature, args.artifact_type, args.stack, candidates, context
+                )
+                final_bundle = generate_bundle(
+                    reviewer, review_system, review_user, args.max_attempts
+                )
+            except GeneratorError as exc:
+                print(
+                    f"WARNING: Reviewer {reviewer_spec} failed; using the first successful "
+                    f"candidate: {exc}",
+                    file=sys.stderr,
+                )
+        else:
+            print(
+                "INFO: No reviewer selected; using the first successful candidate.",
+                file=sys.stderr,
+            )
         for path in write_bundle(args.repo_root, final_bundle):
             print(path)
         return 0

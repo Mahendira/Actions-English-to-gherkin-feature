@@ -9,19 +9,19 @@ on:
         default: openai:gpt-4o-mini
         type: string
       candidate_model_2:
-        description: Candidate 2 as provider:model
-        required: true
-        default: gemini:gemini-3.5-flash-lite
+        description: Optional candidate 2 as provider:model; leave blank to skip
+        required: false
+        default: ""
         type: string
       candidate_model_3:
-        description: Candidate 3 as provider:model
-        required: true
-        default: openrouter:openrouter/free
+        description: Optional candidate 3 as provider:model; leave blank to skip
+        required: false
+        default: ""
         type: string
       reviewer_model:
-        description: Reviewer as provider:model
-        required: true
-        default: openai:gpt-4o-mini
+        description: Optional reviewer as provider:model
+        required: false
+        default: ""
         type: string
 
 permissions:
@@ -68,6 +68,10 @@ jobs:
           for index in 0 1 2; do
             slot=$((index + 1))
             spec="${candidates[$index]}"
+            if [[ -z "${spec//[[:space:]]/}" ]]; then
+              echo "| Candidate $slot | — | SKIPPED |" >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
             if check-llm-model --model "$spec" --timeout-seconds 20; then
               echo "| Candidate $slot | \`$spec\` | READY |" >> "$GITHUB_STEP_SUMMARY"
               ready_candidates=$((ready_candidates + 1))
@@ -76,15 +80,16 @@ jobs:
             fi
           done
 
-          if check-llm-model --model "$REVIEWER_MODEL_SPEC" --timeout-seconds 20; then
+          if [[ -z "${REVIEWER_MODEL_SPEC//[[:space:]]/}" ]]; then
+            echo "| Reviewer | — | SKIPPED |" >> "$GITHUB_STEP_SUMMARY"
+          elif check-llm-model --model "$REVIEWER_MODEL_SPEC" --timeout-seconds 20; then
             echo "| Reviewer | \`$REVIEWER_MODEL_SPEC\` | READY |" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "| Reviewer | \`$REVIEWER_MODEL_SPEC\` | UNAVAILABLE |" >> "$GITHUB_STEP_SUMMARY"
-            failed=1
           fi
 
-          if (( ready_candidates < 2 )); then
-            echo "At least two candidate models must be ready." >&2
+          if (( ready_candidates < 1 )); then
+            echo "At least one candidate model must be ready." >&2
             failed=1
           fi
           exit "$failed"
