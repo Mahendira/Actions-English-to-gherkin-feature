@@ -28,6 +28,11 @@ on:
         required: true
         default: step_definitions
         type: string
+      additional_application_paths:
+        description: Optional comma-separated app files/directories to retain (for example pom.xml,Dockerfile)
+        required: false
+        default: ""
+        type: string
       stack:
         description: Application family and build/test tool
         required: true
@@ -35,7 +40,7 @@ on:
         type: choice
         options: [java-maven, java-gradle, python-pytest]
       output_repo:
-        description: Separate target application repository (owner/repo; not this generator repo)
+        description: Target repository for the orphan application branch (owner/repo)
         required: true
         type: string
       base_branch:
@@ -112,11 +117,6 @@ jobs:
           raw="${raw#git@github.com:}"
           repo="${raw%.git}"
           if [[ ! "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then exit 1; fi
-          if [[ "$repo" == "$CONTROLLER_REPO" ]]; then
-            echo "Target application repository must be different from the generator repository." >&2
-            echo "Create a separate repository and enter its owner/repo value." >&2
-            exit 1
-          fi
           echo "repo=$repo" >> "$GITHUB_OUTPUT"
           echo "owner=${repo%%/*}" >> "$GITHUB_OUTPUT"
           echo "name=${repo#*/}" >> "$GITHUB_OUTPUT"
@@ -166,24 +166,26 @@ jobs:
           CANDIDATE_MODEL_3: ${{ inputs.candidate_model_3 }}
           REVIEWER_MODEL_SPEC: ${{ inputs.reviewer_model }}
           LLM_TIMEOUT_SECONDS: "60"
+          ADDITIONAL_APPLICATION_PATHS: ${{ inputs.additional_application_paths }}
         shell: bash
         run: |
           set -uo pipefail
-          repo_root="$(pwd -P)"
+          source_root="$(pwd -P)"
           feature_path="$(realpath -m -- "${{ inputs.feature_file }}")"
           requirement_path="$(realpath -m -- "${{ inputs.requirement_file }}")"
           unit_tests_path="$(realpath -m -- "${{ inputs.unit_tests_directory }}")"
           step_definitions_path="$(realpath -m -- "${{ inputs.step_definitions_directory }}")"
+          source_path="$(realpath -m -- "${{ inputs.source_directory }}")"
           feedback_file="$RUNNER_TEMP/code-test-feedback.txt"
-          if [[ "$feature_path" != "$repo_root/"* || ! -f "$feature_path" ]]; then
+          if [[ "$feature_path" != "$source_root/"* || ! -f "$feature_path" ]]; then
             echo "Feature file must exist inside the target repository." >&2
             exit 1
           fi
-          if [[ "$unit_tests_path" != "$repo_root/"* || ! -d "$unit_tests_path" ]]; then
+          if [[ "$unit_tests_path" != "$source_root/"* || ! -d "$unit_tests_path" ]]; then
             echo "Unit-test directory must exist inside the target application repository." >&2
             exit 1
           fi
-          if [[ "$step_definitions_path" != "$repo_root/"* || ! -d "$step_definitions_path" ]]; then
+          if [[ "$step_definitions_path" != "$source_root/"* || ! -d "$step_definitions_path" ]]; then
             echo "Step-definition directory must exist inside the target application repository." >&2
             exit 1
           fi
@@ -195,10 +197,58 @@ jobs:
             echo "Step-definition directory is empty: ${{ inputs.step_definitions_directory }}" >&2
             exit 1
           fi
-          if [[ "$requirement_path" != "$repo_root/"* || ! -f "$requirement_path" ]]; then
+          if [[ "$requirement_path" != "$source_root/"* || ! -f "$requirement_path" ]]; then
             echo "Requirement file must exist inside the target application repository." >&2
             exit 1
           fi
+
+          app_root="$RUNNER_TEMP/application-output"
+          mkdir -p "$app_root"
+
+          copy_from_source() {
+            local requested="$1"
+            local resolved relative
+            [[ -n "$requested" ]] || return 0
+            resolved="$(realpath -m -- "$requested")"
+            if [[ "$resolved" != "$source_root/"* ]]; then
+              echo "Application path must remain inside the target repository: $requested" >&2
+              exit 1
+            fi
+            if [[ -e "$resolved" ]]; then
+              relative="$(realpath --relative-to="$source_root" "$resolved")"
+              cp -a --parents -- "$relative" "$app_root"
+            fi
+          }
+
+          feature_relative="$(realpath --relative-to="$source_root" "$feature_path")"
+          requirement_relative="$(realpath --relative-to="$source_root" "$requirement_path")"
+          tests_relative="$(realpath --relative-to="$source_root" "$unit_tests_path")"
+          steps_relative="$(realpath --relative-to="$source_root" "$step_definitions_path")"
+
+          copy_from_source "$feature_relative"
+          copy_from_source "$requirement_relative"
+          copy_from_source "$tests_relative"
+          copy_from_source "$steps_relative"
+          if [[ "$source_path" == "$source_root/"* && -e "$source_path" ]]; then
+            copy_from_source "${{ inputs.source_directory }}"
+          fi
+
+          IFS=',' read -ra extra_paths <<< "$ADDITIONAL_APPLICATION_PATHS"
+          for path in "${extra_paths[@]}"; do
+            path="${path#"${path%%[![:space:]]*}"}"
+            path="${path%"${path##*[![:space:]]}"}"
+            copy_from_source "$path"
+          done
+
+          repo_root="$(realpath "$app_root")"
+          feature_path="$repo_root/$feature_relative"
+          requirement_path="$repo_root/$requirement_relative"
+          unit_tests_path="$repo_root/$tests_relative"
+          step_definitions_path="$repo_root/$steps_relative"
+
+          echo "Clean orphan-branch workspace: $repo_root"
+          echo "Included application files:"
+          find "$repo_root" -type f -printf '%P\n' | sort
 
           run_tests() {
             case "${{ inputs.stack }}" in
@@ -212,16 +262,17 @@ jobs:
                 python -m pip install -q pytest pytest-bdd
                 if [[ -f pyproject.toml ]]; then python -m pip install -q -e . || true; fi
                 if [[ -f requirements.txt ]]; then python -m pip install -q -r requirements.txt; fi
-                if find tests -type f -name 'test_*.py' -print -quit 2>/dev/null | grep -q .; then
-                  pytest
+                if find "$unit_tests_path" -type f -name 'test_*.py' -print -quit 2>/dev/null | grep -q .; then
+                  pytest "$unit_tests_path"
                 else
-                  python -m compileall -q .
+                  python -m compileall -q "$repo_root/${{ inputs.source_directory }}"
                 fi
                 ;;
             esac
           }
 
           passed=false
+          cd "$repo_root"
           for attempt in 1 2 3; do
             echo "Code generation/repair attempt $attempt of 3"
             args=(
@@ -247,51 +298,56 @@ jobs:
             cat "$feedback_file"
           done
           echo "tests_passed=$passed" >> "$GITHUB_OUTPUT"
+          echo "app_root=$repo_root" >> "$GITHUB_OUTPUT"
 
-      - name: Commit generated code
+      - name: Create orphan application branch commit
         id: commit
-        working-directory: target
+        env:
+          APP_ROOT: ${{ steps.code.outputs.app_root }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "$(git status --porcelain --untracked-files=all)" ]]; then
-            echo "No code changes were generated." >&2
+          if [[ -z "$APP_ROOT" || ! -d "$APP_ROOT" ]]; then
+            echo "Application workspace was not created." >&2
             exit 1
           fi
-          branch="ai/${GITHUB_RUN_ID}-generate-application-code-${GITHUB_RUN_ATTEMPT}"
-          git switch -c "$branch"
+          cd "$APP_ROOT"
+          branch="application/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git init --initial-branch="$branch"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "Generate application code from ${{ inputs.feature_file }}"
+          if [[ -z "$(git status --porcelain --untracked-files=all)" ]]; then
+            echo "No application files were produced." >&2
+            exit 1
+          fi
+          git commit -m "Create deployable application from ${{ inputs.feature_file }}"
+          git remote add origin "https://github.com/${{ steps.target.outputs.repo }}.git"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
 
-      - name: Push branch and create pull request
-        working-directory: target
+      - name: Push orphan application branch
         env:
+          APP_ROOT: ${{ steps.code.outputs.app_root }}
           GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
           TESTS_PASSED: ${{ steps.code.outputs.tests_passed }}
         shell: bash
         run: |
           set -euo pipefail
+          cd "$APP_ROOT"
           gh auth setup-git
-          git push --set-upstream origin "${{ steps.commit.outputs.branch }}"
-          if [[ "$TESTS_PASSED" == true ]]; then
-            title="Generate application code (${{ inputs.stack }})"
-            status="Tests passed after no more than three generation/repair attempts."
-          else
-            title="[TESTS FAILING] Generate application code (${{ inputs.stack }})"
-            status="Tests still fail after three generation/repair attempts; human review is required."
-          fi
-          gh pr create \
-            --repo "${{ steps.target.outputs.repo }}" \
-            --base "${{ steps.clone.outputs.base_branch }}" \
-            --head "${{ steps.commit.outputs.branch }}" \
-            --title "$title" \
-            --body "Generated from `${{ inputs.feature_file }}` using three candidates and an independent reviewer. $status"
+          git push --set-upstream origin "HEAD:refs/heads/${{ steps.commit.outputs.branch }}"
+          {
+            echo "## Orphan application branch"
+            echo
+            echo "Repository: `${{ steps.target.outputs.repo }}`"
+            echo "Branch: `${{ steps.commit.outputs.branch }}`"
+            echo "Tests passed: `$TESTS_PASSED`"
+            echo
+            echo "This root branch intentionally has no shared history with `${{ steps.clone.outputs.base_branch }}`."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Report unsuccessful repair
         if: steps.code.outputs.tests_passed != 'true'
         run: |
-          echo "A review PR was created, but tests still fail after three attempts." >&2
+          echo "The orphan application branch was created, but tests still fail after three attempts." >&2
           exit 1
