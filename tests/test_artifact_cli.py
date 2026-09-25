@@ -18,12 +18,22 @@ def arguments(feature: Path, root: Path) -> list[str]:
     ]
 
 
+def create_tdd_inputs(root: Path) -> None:
+    tests = root / "tests"
+    steps = root / "step_definitions"
+    tests.mkdir()
+    steps.mkdir()
+    (tests / "test_behavior.py").write_text("def test_behavior(): pass\n", encoding="utf-8")
+    (steps / "behavior_steps.py").write_text("# BDD steps\n", encoding="utf-8")
+
+
 def test_one_candidate_and_no_reviewer_succeeds(tmp_path, monkeypatch):
     feature = tmp_path / "feature.feature"
     feature.write_text(
         "Feature: Example\n  Scenario: Works\n    Given input\n    When processed\n    Then output\n",
         encoding="utf-8",
     )
+    create_tdd_inputs(tmp_path)
     monkeypatch.setenv("CANDIDATE_MODEL_1", "openai:model")
     monkeypatch.setenv("CANDIDATE_MODEL_2", "")
     monkeypatch.setenv("CANDIDATE_MODEL_3", "")
@@ -46,6 +56,7 @@ def test_failed_optional_reviewer_uses_candidate(tmp_path, monkeypatch):
         "Feature: Example\n  Scenario: Works\n    Given input\n    When processed\n    Then output\n",
         encoding="utf-8",
     )
+    create_tdd_inputs(tmp_path)
     monkeypatch.setenv("CANDIDATE_MODEL_1", "openai:candidate")
     monkeypatch.setenv("CANDIDATE_MODEL_2", "")
     monkeypatch.setenv("CANDIDATE_MODEL_3", "")

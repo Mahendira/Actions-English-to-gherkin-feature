@@ -18,6 +18,16 @@ on:
         required: true
         default: src
         type: string
+      unit_tests_directory:
+        description: Existing unit-test directory used to drive TDD code generation
+        required: true
+        default: tests
+        type: string
+      step_definitions_directory:
+        description: Existing BDD step-definition directory
+        required: true
+        default: step_definitions
+        type: string
       stack:
         description: Application family and build/test tool
         required: true
@@ -25,7 +35,7 @@ on:
         type: choice
         options: [java-maven, java-gradle, python-pytest]
       output_repo:
-        description: Target application repository (owner/repo)
+        description: Separate target application repository (owner/repo; not this generator repo)
         required: true
         type: string
       base_branch:
@@ -102,6 +112,11 @@ jobs:
           raw="${raw#git@github.com:}"
           repo="${raw%.git}"
           if [[ ! "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then exit 1; fi
+          if [[ "$repo" == "$CONTROLLER_REPO" ]]; then
+            echo "Target application repository must be different from the generator repository." >&2
+            echo "Create a separate repository and enter its owner/repo value." >&2
+            exit 1
+          fi
           echo "repo=$repo" >> "$GITHUB_OUTPUT"
           echo "owner=${repo%%/*}" >> "$GITHUB_OUTPUT"
           echo "name=${repo#*/}" >> "$GITHUB_OUTPUT"
@@ -157,9 +172,27 @@ jobs:
           repo_root="$(pwd -P)"
           feature_path="$(realpath -m -- "${{ inputs.feature_file }}")"
           requirement_path="$(realpath -m -- "${{ inputs.requirement_file }}")"
+          unit_tests_path="$(realpath -m -- "${{ inputs.unit_tests_directory }}")"
+          step_definitions_path="$(realpath -m -- "${{ inputs.step_definitions_directory }}")"
           feedback_file="$RUNNER_TEMP/code-test-feedback.txt"
           if [[ "$feature_path" != "$repo_root/"* || ! -f "$feature_path" ]]; then
             echo "Feature file must exist inside the target repository." >&2
+            exit 1
+          fi
+          if [[ "$unit_tests_path" != "$repo_root/"* || ! -d "$unit_tests_path" ]]; then
+            echo "Unit-test directory must exist inside the target application repository." >&2
+            exit 1
+          fi
+          if [[ "$step_definitions_path" != "$repo_root/"* || ! -d "$step_definitions_path" ]]; then
+            echo "Step-definition directory must exist inside the target application repository." >&2
+            exit 1
+          fi
+          if ! find "$unit_tests_path" -type f -print -quit | grep -q .; then
+            echo "Unit-test directory is empty: ${{ inputs.unit_tests_directory }}" >&2
+            exit 1
+          fi
+          if ! find "$step_definitions_path" -type f -print -quit | grep -q .; then
+            echo "Step-definition directory is empty: ${{ inputs.step_definitions_directory }}" >&2
             exit 1
           fi
           if [[ "$requirement_path" != "$repo_root/"* || ! -f "$requirement_path" ]]; then
@@ -197,6 +230,8 @@ jobs:
               --stack "${{ inputs.stack }}"
               --repo-root "$repo_root"
               --source-directory "${{ inputs.source_directory }}"
+              --unit-tests-directory "${{ inputs.unit_tests_directory }}"
+              --step-definitions-directory "${{ inputs.step_definitions_directory }}"
               --max-attempts 3
             )
             if [[ -s "$feedback_file" ]]; then args+=(--feedback-file "$feedback_file"); fi

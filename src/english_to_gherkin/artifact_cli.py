@@ -29,6 +29,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--feedback-file", type=Path)
     result.add_argument("--max-attempts", type=int, default=3)
     result.add_argument("--source-directory", default="src")
+    result.add_argument("--unit-tests-directory", default="tests")
+    result.add_argument("--step-definitions-directory", default="step_definitions")
     return result
 
 
@@ -37,15 +39,35 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.max_attempts < 1 or args.max_attempts > 5:
             raise GeneratorError("--max-attempts must be between 1 and 5")
-        source_directory = PurePosixPath(args.source_directory)
-        if (
-            source_directory.is_absolute()
-            or ".." in source_directory.parts
-            or not source_directory.parts
-            or any(part.startswith(".") for part in source_directory.parts)
-        ):
-            raise GeneratorError("--source-directory must be a safe repository-relative path")
+        directories = {
+            "source": PurePosixPath(args.source_directory),
+            "unit tests": PurePosixPath(args.unit_tests_directory),
+            "step definitions": PurePosixPath(args.step_definitions_directory),
+        }
+        for label, directory in directories.items():
+            if (
+                directory.is_absolute()
+                or ".." in directory.parts
+                or not directory.parts
+                or any(part.startswith(".") for part in directory.parts)
+            ):
+                raise GeneratorError(
+                    f"--{label.replace(' ', '-')}-directory must be a safe repository-relative path"
+                )
+        source_directory = directories["source"]
         source_directory_text = source_directory.as_posix()
+        unit_tests_directory_text = directories["unit tests"].as_posix()
+        step_definitions_directory_text = directories["step definitions"].as_posix()
+        if args.artifact_type == "application-code":
+            for label, directory in (
+                ("unit-test", unit_tests_directory_text),
+                ("step-definition", step_definitions_directory_text),
+            ):
+                path = args.repo_root / directory
+                if not path.is_dir() or not any(item.is_file() for item in path.rglob("*")):
+                    raise GeneratorError(
+                        f"The {label} directory must exist and contain files: {directory}"
+                    )
         feature = args.feature_file.read_text(encoding="utf-8")
         if not feature.strip():
             raise GeneratorError("Feature file cannot be empty")
@@ -65,6 +87,8 @@ def main(argv: list[str] | None = None) -> int:
             context,
             feedback,
             source_directory_text,
+            unit_tests_directory_text,
+            step_definitions_directory_text,
         )
         candidates = {}
         validator = None
@@ -96,6 +120,8 @@ def main(argv: list[str] | None = None) -> int:
                     candidates,
                     context,
                     source_directory_text,
+                    unit_tests_directory_text,
+                    step_definitions_directory_text,
                 )
                 final_bundle = generate_bundle(
                     reviewer,

@@ -141,6 +141,8 @@ def generation_prompt(
     repository_context: str,
     feedback: str | None = None,
     source_directory: str = "src",
+    unit_tests_directory: str = "tests",
+    step_definitions_directory: str = "step_definitions",
 ) -> tuple[str, str]:
     system = """You are a senior software engineer working in a pull-request-only automation.
 Return only JSON in this exact shape:
@@ -157,7 +159,10 @@ Do not add behavior that is unsupported by the feature.
 Application repository layout:
 - Put all production source code and runtime assets under `{source_directory}/`.
 - Do not create an `app/` directory or place production source at the repository root.
-- Preserve the requirement text, authoritative feature files, and existing tests.
+- Treat tests under `{unit_tests_directory}/` as executable specifications that production code
+  must satisfy. Do not weaken, delete, skip, or rewrite those tests.
+- Preserve and satisfy BDD glue under `{step_definitions_directory}/`.
+- Preserve the requirement text and authoritative feature files.
 - Keep build, dependency, container, and infrastructure-as-code files at the repository root
   when they are needed to build or deploy the application.
 - When the feature describes cloud infrastructure, include the minimal deployable infrastructure
@@ -188,6 +193,8 @@ def review_prompt(
     candidates: Mapping[str, FileBundle],
     repository_context: str,
     source_directory: str = "src",
+    unit_tests_directory: str = "tests",
+    step_definitions_directory: str = "step_definitions",
 ) -> tuple[str, str]:
     system = """You are an independent senior code reviewer and consolidator.
 Return only JSON in this exact shape:
@@ -212,7 +219,9 @@ Never invent behavior. Never output Markdown or patches. Use safe repository-rel
 Application repository layout:
 - Put all production source code and runtime assets under `{source_directory}/`.
 - Do not create an `app/` directory or place production source at the repository root.
-- Preserve requirement text, feature files, tests, and required deployment configuration.
+- Treat `{unit_tests_directory}/` as immutable executable specifications.
+- Preserve and satisfy `{step_definitions_directory}/`.
+- Preserve requirement text, feature files, and required deployment configuration.
 """
     user = f"""Artifact: {artifact_type}
 Stack: {stack}
