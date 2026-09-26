@@ -8,23 +8,25 @@ Feature: Contact Page Submission
   Scenario: Successful form submission
     Given the visitor fills in the contact form with valid first name, last name, email address, and message
     When the visitor submits the form
-    Then the application saves the submission to DynamoDB
+    Then a POST request is sent with the entered fields
+    And the application saves the submission to DynamoDB
     And the confirmation page is displayed
 
   Scenario: Submission with missing fields
     Given the visitor fills in the contact form with missing first name
     When the visitor submits the form
     Then an error message is displayed indicating the missing field
-    And the submission is not saved
+    And the submission is not saved to DynamoDB
 
-  Scenario: Submission with invalid email
+  Scenario: Submission with invalid email format
     Given the visitor fills in the contact form with an invalid email address
     When the visitor submits the form
     Then an error message is displayed indicating the invalid email
-    And the submission is not saved
+    And the submission is not saved to DynamoDB
 
   Scenario: Database failure during submission
     Given the visitor fills in the contact form with valid details
-    When the visitor submits the form and a database error occurs
-    Then an error message is displayed indicating a submission failure
-    And the submission is not saved
+    When the visitor submits the form
+    And a database failure occurs
+    Then an error message is displayed
+    And the submission is not saved to DynamoDB
